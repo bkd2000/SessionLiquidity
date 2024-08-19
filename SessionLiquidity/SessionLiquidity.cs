@@ -1,52 +1,33 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using TradingPlatform.BusinessLayer;
 
-
-namespace CustomIndicator
+namespace BKD
 {
-    public class HistoricalDataExample : Indicator
+    public class SessionLiquidity : Indicator
     {
         private HistoricalData historicalData;
 
         #region Parameters
 
-        private const string START_TIME_SI = "Start time";
-        private const string END_TIME_SI = "End time";
+        [InputParameter("UTC", 1)]
+        public int offsetUTC = -4;
+        
+        [InputParameter("Session 1 name", 2)]
+        public string session1name;
 
-        [InputParameter(START_TIME_SI, 10)]
-        public DateTime StartTime
-        {
-            get
-            {
-                if (this.startTime == default)
-                    this.startTime = Core.Instance.TimeUtils.DateTimeUtcNow.Date;
+        [InputParameter("Session 1 start", 3)]
+        public DateTime session1start;
 
-                return this.startTime;
-            }
-            set => this.startTime = value;
-        }
-        private DateTime startTime;
-
-        [InputParameter(END_TIME_SI, 20)]
-        public DateTime EndTime
-        {
-            get
-            {
-                if (this.endTime == default)
-                    this.endTime = Core.Instance.TimeUtils.DateTimeUtcNow.Date.AddDays(1).AddTicks(-1);
-
-                return this.endTime;
-            }
-            set => this.endTime = value;
-        }
-        private DateTime endTime;
+        [InputParameter("Session 1 end", 4)]
+        public DateTime session1end;
 
         #endregion Parameters
 
-        public HistoricalDataExample() : base()
+        public SessionLiquidity() : base()
         {
-            Name = "HistoricalDataExample";
+            Name = "Sessions Liquidity";
             SeparateWindow = false;
             OnBackGround = true;
         }
@@ -54,22 +35,32 @@ namespace CustomIndicator
         protected override void OnInit()
         {
             // Pobieranie danych historycznych 1-minutowych
-            var fromTime = DateTime.UtcNow.AddDays(-7); // Na przykład, 7 dni wstecz
+            var fromTime = DateTime.UtcNow.AddDays(-3); // Na przykład, 3 dni wstecz
             var toTime = DateTime.UtcNow; // Do teraz
 
-            Symbol symbol = Core.Instance.Symbols.FirstOrDefault();
+            //Symbol symbol = Core.Instance.Symbols.FirstOrDefault();
 
-            historicalData = symbol.GetHistory(new HistoryRequestParameters
+            //if (symbol == null)
+            //{
+            //    Core.Loggers.Log("Brak dostępnych symboli.");
+            //    return;
+            //}
+
+            historicalData = this.Symbol.GetHistory(new HistoryRequestParameters
             {
-                Symbol = this.Symbol,
+                //Symbol = symbol,
                 Aggregation = new HistoryAggregationTime(Period.MIN1),
                 FromTime = fromTime,
                 ToTime = toTime
             });
 
-            if (this.historicalData != null)
+            if (historicalData != null && historicalData.Count > 0)
             {
-                Core.Loggers.Log($"Pobrano {this.historicalData.Count()} 1-minutowych danych od {fromTime} do {toTime}");
+                Core.Loggers.Log($"Symbol: {this.Symbol}  Pobrano {historicalData.Count} 1-minutowych danych od {fromTime} do {toTime}");
+                var lastBar = historicalData[historicalData.Count - 1];
+                Core.Loggers.Log($"Ostatni bar: Czas={lastBar.TimeLeft}, Cena zamknięcia={lastBar[PriceType.Close]}");
+
+                GetHighLowBetweenHours(historicalData,"Asia", 4, 8);
             }
             else
             {
@@ -80,22 +71,79 @@ namespace CustomIndicator
         protected override void OnUpdate(UpdateArgs args)
         {
             // Przykład użycia danych historycznych w metodzie OnUpdate
-            if (this.historicalData != null && this.historicalData.Count() > 0)
+            if (historicalData != null && historicalData.Count > 0)
             {
-                var lastBar = this.historicalData[0]; // Pobierz ostatni bar
+                var lastBar = historicalData[historicalData.Count - 1]; // Pobierz ostatni bar
 
                 // Wyświetl informacje o czasie i cenie zamknięcia ostatniego bara
-                Core.Loggers.Log($"Ostatni bar: Czas={lastBar.TimeLeft}, Cena zamknięcia={lastBar[PriceType.Close]}");
+                //Core.Loggers.Log($"Ostatni bar: Czas={lastBar.TimeLeft}, Cena zamknięcia={lastBar[PriceType.Close]}");
             }
         }
 
-        public void ComputeSessions(HistoricalData data)
+        
+        public (double High, double Low) GetHighLowBetweenHours(HistoricalData historicalData, string name, int startHour, int endHour)
         {
-            for (int i = 0; i < data.Count(); i++) {
+            // Prepare start and end times for today's date
+            DateTime today = DateTime.Now.Date;
+            
+            DateTime from = today.AddHours(startHour);
+            DateTime to = today.AddHours(endHour);
 
-                var lastBar = this.historicalData[0]; // Pobierz ostatni bar
+            Core.Loggers.Log($"W funkcji, dane: {historicalData.Count()}, start {from.ToString()}, end {to}");
 
+            // Get history for the specified period
+            double highestPrice = double.MinValue;
+            double lowestPrice = double.MaxValue;
+            DateTime highestTime = from;
+            DateTime lowestTime = from;
+
+            // Go through each history item in the period
+            for (int i = 0; i < historicalData.Count; i++)
+            {
+                IHistoryItem historyItem = historicalData[i]; 
+                if( historyItem.TimeLeft >= from && historyItem.TimeLeft <= to)
+                {
+                    // Check if this history item's price is the highest we've seen
+                    if (historyItem[PriceType.High] > highestPrice)
+                    {
+                        Core.Loggers.Log($"High {historicalData[i][PriceType.High]}, HH: {highestPrice}, i={i}");
+                        highestPrice = historyItem[PriceType.High];
+                        highestTime = historyItem.TimeLeft;
+                    }
+
+                    // Check if this history item's price is the lowest we've seen
+                    if (historyItem[PriceType.Low] < lowestPrice) 
+                    {
+                        lowestPrice = historyItem[PriceType.Low];
+                        lowestTime = historyItem.TimeLeft;
+                    }
+                }
+                
             }
+
+            // Return the highest and lowest prices we found
+            Core.Loggers.Log($"Max: {highestPrice.ToString()} @ {highestTime} - Low: {lowestPrice} @ {lowestTime}");
+            sessionsliquidites.Add(highestTime, new SessionLQ(highestTime, highestPrice, name + "high", true));
+            sessionsliquidites.Add(lowestTime, new SessionLQ(lowestTime, lowestPrice, name + "low", true));
+            return (highestPrice, lowestPrice);
         }
+        class SessionLQ
+        {
+            public SessionLQ(DateTime a, double b, string c, bool e)
+            {
+                this.start = a;
+                this.price = b;
+                this.name = c;
+                this.high = e;
+            }
+
+            public DateTime start { get; set; }
+            public DateTime? end { get; set; }
+            public double price { get; set; }
+            public string name { get; set; }
+            public bool high { get; set; }
+        }
+
+        SortedDictionary<DateTime, SessionLQ> sessionsliquidites = new SortedDictionary<DateTime, SessionLQ>();
     }
 }
